@@ -5,6 +5,7 @@ import numpy as np
 import json
 import torch.nn.functional as F
 import cv2
+import math
 import shutil
 import pickle
 import yaml
@@ -12,8 +13,9 @@ import platform
 import os
 import glob
 import logging
+import random
 from io import BytesIO
-from acr.config import args
+# from acr.config import args
 from torch.autograd import Variable
 from torch.nn.parallel._functions import Scatter
 from torch.nn.modules import Module
@@ -27,9 +29,23 @@ from scipy.spatial.transform import Rotation as R
 from tqdm import tqdm
 
 
+model_path = './checkpoints/wild.pkl'
+centermap_conf_thresh = 0.35
+FL = 1265 # focal_length
+model_version = 1
+cam_id = 1
+
 TAG_CHAR = np.array([202021.25], np.float32)
 img_exts = ['.bmp', '.dib', '.jpg', '.jpeg', '.jpe', '.png', '.webp', '.pbm', '.pgm', '.ppm', '.pxm', '.pnm', '.tiff', '.tif', '.sr', '.ras', '.exr', '.hdr', '.pic',\
             '.PNG', '.JPG', '.JPEG']
+
+def seed_everything(seed=43):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    return seed
 
 def get_kp2d_on_org_img(kp2d, offset):
     assert kp2d.shape[1]>=2, print('Espected shape of kp2d is Kx2, while get {}'.formt(kp2d.shape))
@@ -122,9 +138,11 @@ def collect_image_list(image_folder=None, collect_subdirs=False):
     return file_list
 
 def save_results(image_folder, output_dir, results_dict):
-    model_name = args().model_path.split('/')[-1]
+    # model_name = args().model_path.split('/')[-1]
+    model_name = model_path.split('/')[-1]
     path_name = image_folder.split('/')[-1]
-    with open(output_dir + f'/{path_name}_hand{model_name}_{args().centermap_conf_thresh}.pkl', 'wb') as f:
+    # with open(output_dir + f'/{path_name}_hand{model_name}_{args().centermap_conf_thresh}.pkl', 'wb') as f:
+    with open(output_dir + f'/{path_name}_hand{model_name}_{centermap_conf_thresh}.pkl', 'wb') as f:
         pickle.dump(results_dict, f)
     return
 
@@ -360,7 +378,8 @@ def rotation_matrix_to_angle_axis(rotation_matrix):
     return aa
 
 def rot6d_to_rotmat(x):
-    x = x.view(-1,3,2)
+    # x = x.view(-1,3,2)
+    x = x.reshape(-1,3,2)
 
     # Normalize the first vector
     b1 = F.normalize(x[:, :, 0], dim=1, eps=1e-6)
@@ -396,15 +415,24 @@ def convert_kp2d_from_input_to_orgimg(kp2ds, offsets):
     kp2ds_on_orgimg = (kp2ds + 1) * img_pad_size.unsqueeze(1) / 2 + leftTop.unsqueeze(1)
     return kp2ds_on_orgimg
 
-def vertices_kp3d_projection(outputs, params_dict, meta_data=None, presp=args().model_version>3):
+# def vertices_kp3d_projection(outputs, params_dict, meta_data=None, presp=args().model_version>3):
+def vertices_kp3d_projection(outputs, params_dict, meta_data=None, presp=model_version>3):
+    # vertices#: [2, 778, 3]
     params_dict, vertices, j3ds = params_dict, outputs['verts'], outputs['j3d']
     verts_camed = batch_orth_proj(vertices, params_dict['cam'], mode='3d',keep_dim=True)
     pj3d = batch_orth_proj(j3ds, params_dict['cam'], mode='2d')
     predicts_j3ds = j3ds[:,:24].contiguous().detach().cpu().numpy()
     predicts_pj2ds = (pj3d[:,:,:2][:,:24].detach().cpu().numpy()+1)*256
+    # img = np.zeros((512, 512, 3))
+    # img[:, 89:89+334] = cv2.imread('0.jpg')
+    # for i, j in enumerate(predicts_pj2ds[1]):
+    #     cv2.circle(img, (int(j[0]), int(j[1])), 1, (255,0,0), 1)
+    #     cv2.putText(img, str(i), (int(j[0]), int(j[1])), cv2.FONT_HERSHEY_COMPLEX, 0.5, (0,0,255), 1)
+    # cv2.imwrite('tmp0.png', img)
 
     cam_trans = estimate_translation(predicts_j3ds, predicts_pj2ds, \
-                                focal_length=args().focal_length, img_size=np.array([512,512])).to(vertices.device)
+                                # focal_length=args().focal_length, img_size=np.array([512,512])).to(vertices.device)
+                                focal_length=FL, img_size=np.array([512,512])).to(vertices.device)
     projected_outputs = {'verts_camed': verts_camed, 'pj2d': pj3d[:,:,:2], 'cam_trans':cam_trans}
 
     if meta_data is not None:
@@ -548,55 +576,55 @@ def transform_rot_representation(rot, input_type='mat',out_type='vec'):
         out = r.as_euler('xyz', degrees=False)
     return out
 
-# def compute_similarity_transform(S1, S2):
-#     '''
-#     Computes a similarity transform (sR, t) that takes
-#     a set of 3D points S1 (3 x N) closest to a set of 3D points S2,
-#     where R is an 3x3 rotation matrix, t 3x1 translation, s scale.
-#     i.e. solves the orthogonal Procrutes problem.
-#     '''
-#     transposed = False
-#     if S1.shape[0] != 3 and S1.shape[0] != 2:
-#         S1 = S1.T
-#         S2 = S2.T
-#         transposed = True
-#     assert(S2.shape[1] == S1.shape[1])
+def compute_similarity_transform(S1, S2):
+    '''
+    Computes a similarity transform (sR, t) that takes
+    a set of 3D points S1 (3 x N) closest to a set of 3D points S2,
+    where R is an 3x3 rotation matrix, t 3x1 translation, s scale.
+    i.e. solves the orthogonal Procrutes problem.
+    '''
+    transposed = False
+    if S1.shape[0] != 3 and S1.shape[0] != 2:
+        S1 = S1.T
+        S2 = S2.T
+        transposed = True
+    assert(S2.shape[1] == S1.shape[1])
 
-#     # 1. Remove mean.
-#     mu1 = S1.mean(axis=1, keepdims=True)
-#     mu2 = S2.mean(axis=1, keepdims=True)
-#     X1 = S1 - mu1
-#     X2 = S2 - mu2
+    # 1. Remove mean.
+    mu1 = S1.mean(axis=1, keepdims=True)
+    mu2 = S2.mean(axis=1, keepdims=True)
+    X1 = S1 - mu1
+    X2 = S2 - mu2
 
-#     # 2. Compute variance of X1 used for scale.
-#     var1 = np.sum(X1**2)
+    # 2. Compute variance of X1 used for scale.
+    var1 = np.sum(X1**2)
 
-#     # 3. The outer product of X1 and X2.
-#     K = X1.dot(X2.T)
+    # 3. The outer product of X1 and X2.
+    K = X1.dot(X2.T)
 
-#     # 4. Solution that Maximizes trace(R'K) is R=U*V', where U, V are
-#     # singular vectors of K.
-#     U, s, Vh = np.linalg.svd(K)
-#     V = Vh.T
-#     # Construct Z that fixes the orientation of R to get det(R)=1.
-#     Z = np.eye(U.shape[0])
-#     Z[-1, -1] *= np.sign(np.linalg.det(U.dot(V.T)))
-#     # Construct R.
-#     R = V.dot(Z.dot(U.T))
+    # 4. Solution that Maximizes trace(R'K) is R=U*V', where U, V are
+    # singular vectors of K.
+    U, s, Vh = np.linalg.svd(K)
+    V = Vh.T
+    # Construct Z that fixes the orientation of R to get det(R)=1.
+    Z = np.eye(U.shape[0])
+    Z[-1, -1] *= np.sign(np.linalg.det(U.dot(V.T)))
+    # Construct R.
+    R = V.dot(Z.dot(U.T))
 
-#     # 5. Recover scale.
-#     scale = np.trace(R.dot(K)) / var1
+    # 5. Recover scale.
+    scale = np.trace(R.dot(K)) / var1
 
-#     # 6. Recover translation.
-#     t = mu2 - scale*(R.dot(mu1))
+    # 6. Recover translation.
+    t = mu2 - scale*(R.dot(mu1))
 
-#     # 7. Error:
-#     S1_hat = scale*R.dot(S1) + t
+    # 7. Error:
+    S1_hat = scale*R.dot(S1) + t
 
-#     if transposed:
-#         S1_hat = S1_hat.T
+    if transposed:
+        S1_hat = S1_hat.T
 
-#     return S1_hat
+    return S1_hat
 
 
 def batch_rodrigues(param):
@@ -738,36 +766,36 @@ def batch_lrotmin(param):
     return Rs.view(-1, 23 * 9)
 
 
-# def rotation_matrix_to_angle_axis(rotation_matrix):
-#     """
-#     This function is borrowed from https://github.com/kornia/kornia
+def rotation_matrix_to_angle_axis(rotation_matrix):
+    """
+    This function is borrowed from https://github.com/kornia/kornia
 
-#     Convert 3x4 rotation matrix to Rodrigues vector
+    Convert 3x4 rotation matrix to Rodrigues vector
 
-#     Args:
-#         rotation_matrix (Tensor): rotation matrix.
+    Args:
+        rotation_matrix (Tensor): rotation matrix.
 
-#     Returns:
-#         Tensor: Rodrigues vector transformation.
+    Returns:
+        Tensor: Rodrigues vector transformation.
 
-#     Shape:
-#         - Input: :math:`(N, 3, 4)`
-#         - Output: :math:`(N, 3)`
+    Shape:
+        - Input: :math:`(N, 3, 4)`
+        - Output: :math:`(N, 3)`
 
-#     Example:
-#         >>> input = torch.rand(2, 3, 4)  # Nx4x4
-#         >>> output = tgm.rotation_matrix_to_angle_axis(input)  # Nx3
-#     """
-#     if rotation_matrix.shape[1:] == (3,3):
-#         rot_mat = rotation_matrix.reshape(-1, 3, 3)
-#         hom = torch.tensor([0, 0, 1], dtype=torch.float32,
-#                            device=rotation_matrix.device).reshape(1, 3, 1).expand(rot_mat.shape[0], -1, -1)
-#         rotation_matrix = torch.cat([rot_mat, hom], dim=-1)
+    Example:
+        >>> input = torch.rand(2, 3, 4)  # Nx4x4
+        >>> output = tgm.rotation_matrix_to_angle_axis(input)  # Nx3
+    """
+    if rotation_matrix.shape[1:] == (3,3):
+        rot_mat = rotation_matrix.reshape(-1, 3, 3)
+        hom = torch.tensor([0, 0, 1], dtype=torch.float32,
+                           device=rotation_matrix.device).reshape(1, 3, 1).expand(rot_mat.shape[0], -1, -1)
+        rotation_matrix = torch.cat([rot_mat, hom], dim=-1)
 
-#     quaternion = rotation_matrix_to_quaternion(rotation_matrix)
-#     aa = quaternion_to_angle_axis(quaternion)
-#     aa[torch.isnan(aa)] = 0.0
-#     return aa
+    quaternion = rotation_matrix_to_quaternion(rotation_matrix)
+    aa = quaternion_to_angle_axis(quaternion)
+    aa[torch.isnan(aa)] = 0.0
+    return aa
 
 
 def quaternion_to_angle_axis(quaternion: torch.Tensor) -> torch.Tensor:
@@ -854,6 +882,14 @@ def rotation_matrix_to_quaternion(rotation_matrix, eps=1e-6):
         raise ValueError(
             "Input size must be a three dimensional tensor. Got {}".format(
                 rotation_matrix.shape))
+    if rotation_matrix.shape[1:] == (3,3):
+        hom_mat = torch.tensor([0, 0, 1]).float()
+        rot_mat = rotation_matrix.reshape(-1, 3, 3)
+        batch_size, device = rot_mat.shape[0], rot_mat.device
+        hom_mat = hom_mat.view(1, 3, 1)
+        hom_mat = hom_mat.repeat(batch_size, 1, 1).contiguous()
+        hom_mat = hom_mat.to(device)
+        rotation_matrix = torch.cat([rot_mat, hom_mat], dim=-1)
     if not rotation_matrix.shape[-2:] == (3, 4):
         raise ValueError(
             "Input size must be a N x 3 x 4  tensor. Got {}".format(
@@ -905,6 +941,65 @@ def rotation_matrix_to_quaternion(rotation_matrix, eps=1e-6):
     q *= 0.5
     return q
 
+# ---------------------gfx
+def eulerAngles2rotationMat(theta, format='degree'):
+    """
+    Calculates Rotation Matrix given euler angles.
+    :param theta: 1-by-3 list [rx, ry, rz] angle in degree
+    :return:
+    RPY角，是ZYX欧拉角，依次 绕定轴XYZ转动[rx, ry, rz]
+    """
+    if format == 'degree':
+        theta = [i * math.pi / 180.0 for i in theta]
+ 
+    R_x = np.array([[1, 0, 0],
+                    [0, math.cos(theta[0]), -math.sin(theta[0])],
+                    [0, math.sin(theta[0]), math.cos(theta[0])]
+                    ])
+ 
+    R_y = np.array([[math.cos(theta[1]), 0, math.sin(theta[1])],
+                    [0, 1, 0],
+                    [-math.sin(theta[1]), 0, math.cos(theta[1])]
+                    ])
+ 
+    R_z = np.array([[math.cos(theta[2]), -math.sin(theta[2]), 0],
+                    [math.sin(theta[2]), math.cos(theta[2]), 0],
+                    [0, 0, 1]
+                    ])
+    R = np.dot(R_z, np.dot(R_y, R_x))
+    return R
+ 
+def axis_angle_to_quaternion(axis_angle: torch.Tensor) -> torch.Tensor:
+    """
+    Convert rotations given as axis/angle to quaternions.
+
+    Args:
+        axis_angle: Rotations given as a vector in axis angle form,
+            as a tensor of shape (..., 3), where the magnitude is
+            the angle turned anticlockwise in radians around the
+            vector's direction.
+
+    Returns:
+        quaternions with real part first, as tensor of shape (..., 4).
+    """
+    angles = torch.norm(axis_angle, p=2, dim=-1, keepdim=True)
+    half_angles = angles * 0.5
+    eps = 1e-6
+    small_angles = angles.abs() < eps
+    sin_half_angles_over_angles = torch.empty_like(angles)
+    sin_half_angles_over_angles[~small_angles] = (
+        torch.sin(half_angles[~small_angles]) / angles[~small_angles]
+    )
+    # for x small, sin(x/2) is about x/2 - (x/2)^3/6
+    # so sin(x/2)/x is about 1/2 - (x*x)/48
+    sin_half_angles_over_angles[small_angles] = (
+        0.5 - (angles[small_angles] * angles[small_angles]) / 48
+    )
+    quaternions = torch.cat(
+        [torch.cos(half_angles), axis_angle * sin_half_angles_over_angles], dim=-1
+    )
+    return quaternions
+    
 #__________________intersection tools_______________________
 
 '''
@@ -965,7 +1060,6 @@ def get_rectangle_intersect_ratio(lt0, rb0, lt1, rb1):
         return 0.0
     else:
         return 1.0 * get_rectangle_area(lt0, rb0) / get_rectangle_area(lt1, rb1)
-
 
 ###############
 # DataParallel
@@ -1339,7 +1433,8 @@ def img_preprocess(image, imgpath=None, input_size=512, single_img_input=False, 
 class OpenCVCapture:
     def __init__(self, video_file=None, show=False):
         if video_file is None:
-            self.cap = cv2.VideoCapture(int(args().cam_id))
+            # self.cap = cv2.VideoCapture(int(args().cam_id))
+            self.cap = cv2.VideoCapture(int(cam_id))
         else:
             self.cap = cv2.VideoCapture(video_file)
             self.length = self.cap.get(cv2.CAP_PROP_FRAME_COUNT)
@@ -1525,3 +1620,172 @@ class OneEuroFilter:
     if print_inter:
         print(self.compute_alpha(cutoff))
     return self.x_filter.process(x, self.compute_alpha(cutoff))
+
+# ---------------------------------------------------------
+def generate_heatmap(joints_left, joints_right, height, width, adaptive_sigma=True, padding=True):
+    if joints_left is None and joints_right is None:
+        joints = []
+    elif joints_left is not None and joints_right is not None:
+        joints_left = joints_left.copy()
+        joints_right = joints_right.copy()
+        # if joints_left[2] > 1 and joints_left[3] > 1:
+        if 1:
+            joints_left[[0,2]] /= width
+            joints_left[[1,3]] /= height
+            joints_right[[0,2]] /= width
+            joints_right[[1,3]] /= height
+        joints = [joints_left, joints_right]
+    elif joints_left is not None and joints_right is None:
+        joints_left = joints_left.copy()
+        # if joints_left[2] > 1 and joints_left[3] > 1:
+        if 1:
+            joints_left[[0,2]] /= width
+            joints_left[[1,3]] /= height
+        joints = [joints_left, []]
+    elif joints_left is None and joints_right is not None:
+        joints_right = joints_right.copy()
+        # if joints_right[2] > 1 and joints_right[3] > 1:
+        if 1:
+            joints_right[[0,2]] /= width
+            joints_right[[1,3]] /= height
+        joints = [[], joints_right]
+
+    if  height > width:
+        height_ = 64
+        width_ = int(64 / height * width)
+        pl = int((64 - width_) / 2)
+        pr = 64 - width_ - pl
+        pu, pd = 0, 0
+    else:
+        width_ = 64
+        height_ = int(64 / width * height)
+        pl, pr = 0, 0
+        pu = int((64 - height_) / 2)
+        pd = 64 - height_ - pu
+    heatmap = np.zeros((2, height_, width_), dtype=np.float32)
+    
+    sigmas = []
+    for i, joint in enumerate(joints):
+        if len(joint) == 0:
+            continue
+        cx, cy, w, h = joint
+        cx, cy, w, h = cx*width_, cy*height_, w*width_, h*height_
+        if adaptive_sigma:
+            area = w*h
+            if area < 0.1:
+                sigma = (7, 7)
+            elif area < 0.15:
+                sigma = (9, 9)
+            elif area < 0.2:
+                sigma = (11, 11)
+            elif area < 0.25:
+                sigma = (13, 13)
+            else:
+                sigma = (15, 15)
+        else:
+            sigma = (9, 9)
+        # print(cx, cy, width_, height_, joints_left, joints_right, height, width)
+        heatmap[i, int(cy), int(cx)] = 1
+        # exit()
+        heatmap[i] = cv2.GaussianBlur(heatmap[i], sigma, 0)
+        heatmap[i] /= heatmap[i].max()
+        sigmas.append(sigma[0])
+    if padding:
+        heatmap = np.pad(heatmap, ((0, 0), (pu, pd), (pl, pr)), 'constant')
+
+    return heatmap, (height_, width_, pl, pr, pu, pd), sigmas
+
+def visualize(data_dict, renderer, save_dir='', name='0'):
+    os.makedirs(f'{save_dir}/mask/', exist_ok=True)
+    os.makedirs(f'{save_dir}/hms/', exist_ok=True)
+    os.makedirs(f'{save_dir}/render/', exist_ok=True)
+    # os.makedirs(f'{save_dir}/obj/', exist_ok=True)
+    # os.makedirs(f'{save_dir}/j2d/', exist_ok=True)
+
+    mean=[0.485, 0.456, 0.406]
+    std=[0.229, 0.224, 0.225]
+    imgTensor = (data_dict['image'][0].detach().cpu()*torch.tensor(std).view(3,1,1) + torch.tensor(mean).view(3,1,1)).permute(1, 2, 0) * 255
+    img = np.clip(imgTensor.detach().numpy(), 0, 255).astype(np.uint8)[..., ::-1]
+    # mask
+    masks = (data_dict['segms'].detach().sigmoid().cpu().numpy() > 0.5).astype(np.uint8)
+    n,c,h,w = masks.shape
+    mask_ = np.zeros((h, w, 3))
+    for i, m in enumerate(masks[0]):
+        if i < 16:
+            mask_[:,:,0] += i*15*m
+        elif i < 32:
+            mask_[:,:, 2] += (i-16)*15*m
+        else:
+            mask_[:,:,1] += 255*m
+    mask_ = np.clip(mask_, 0, 255)
+    img_ = cv2.resize(img, (w,h))
+    mask = img_*0.5 + mask_*0.5
+    cv2.imwrite(f'{save_dir}/mask/{name}.png', mask)
+    # hms
+    hms_l = np.zeros((64, 64, 3))
+    hms_r = np.zeros((64, 64, 3))
+    # hms_l[:,:,2] = (data_dict['l_center_map'][0].sigmoid().detach().cpu().numpy()*255).astype(np.uint8)
+    # hms_r[:,:,2] = (data_dict['r_center_map'][0].sigmoid().detach().cpu().numpy()*255).astype(np.uint8)
+    hms_l[:,:,2] = (data_dict['l_center_map'][0].detach().cpu().numpy()*255).astype(np.uint8)
+    hms_r[:,:,2] = (data_dict['r_center_map'][0].detach().cpu().numpy()*255).astype(np.uint8)
+    hms_l = cv2.resize(hms_l, (256, 256))
+    hms_r = cv2.resize(hms_r, (256, 256))
+    img_ = cv2.resize(img, (256, 256))
+    hms_l = img_*0.5 + hms_l*0.5
+    hms_r = img_*0.5 + hms_r*0.5
+    hms = np.hstack((hms_r, hms_l))
+    cv2.imwrite(f'{save_dir}/hms/{name}.png', hms)
+    # mano
+    l_flag = data_dict['l_centers_conf'][0] > 0.35
+    r_flag = data_dict['l_centers_conf'][0] > 0.35
+    colors = [[1,0,0], [0,0,1]]
+    img_j2d = img.copy()
+    if l_flag:
+        # save_obj(data_dict['l_handV'][0].cpu().detach().numpy(), data_dict['l_face'].cpu().detach().numpy(), color=[0.5,0.5,0.5], obj_mesh_name=f'{save_dir}/obj/{name}-left.obj')
+        l_pj3d = data_dict['l_handJ'][:, :, :2] * data_dict['l_params_pred'][:, [0]].unsqueeze(2) + data_dict['l_params_pred'][:, 1:1+2].unsqueeze(1)
+        l_pj2ds = (l_pj3d[:,:,:2][:,:24].detach().cpu().numpy()+1)*256
+        # for i, j in enumerate(l_pj2ds[0]):
+        #     cv2.circle(img_j2d, (int(j[0]), int(j[1])), 1, (255,0,0), 1)
+        #     cv2.putText(img_j2d, 'l'+str(i), (int(j[0]), int(j[1])), cv2.FONT_HERSHEY_COMPLEX, 0.5, (0,0,255), 1)
+        l_j3ds = data_dict['l_handJ'][:,:24].contiguous().detach().cpu().numpy()
+        l_cam_trans = estimate_translation(l_j3ds[[0]], l_pj2ds[[0]], focal_length=FL, img_size=np.array([512,512]))
+        l_hand = data_dict['l_handV'][[0]] + l_cam_trans.to(data_dict['l_handV'].device)
+    if r_flag:
+        # save_obj(data_dict['r_handV'][0].cpu().detach().numpy(), data_dict['r_face'].cpu().detach().numpy(), color=[0.5,0.5,0.5], obj_mesh_name=f'{save_dir}/obj/{name}-right.obj')
+        r_pj3d = data_dict['r_handJ'][:, :, :2] * data_dict['r_params_pred'][:, [0]].unsqueeze(2) + data_dict['r_params_pred'][:, 1:1+2].unsqueeze(1)
+        r_pj2ds = (r_pj3d[:,:,:2][:,:24].detach().cpu().numpy()+1)*256
+        # for i, j in enumerate(r_pj2ds[0]):
+        #     cv2.circle(img_j2d, (int(j[0]), int(j[1])), 1, (0,0,255), 1)
+        #     cv2.putText(img_j2d, 'r'+str(i), (int(j[0]), int(j[1])), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255,0,0), 1)
+        r_j3ds = data_dict['r_handJ'][:,:24].contiguous().detach().cpu().numpy()
+        r_cam_trans = estimate_translation(r_j3ds[[0]], r_pj2ds[[0]], focal_length=FL, img_size=np.array([512,512]))
+        r_hand = data_dict['r_handV'][[0]] + r_cam_trans.to(data_dict['l_handV'].device)
+        
+    # cv2.imwrite(f'{save_dir}/j2d/{name}.png', img_j2d)
+    if l_flag and r_flag:
+        v3d = torch.cat((l_hand, r_hand), 1)
+        faces = torch.cat((data_dict['l_face'], data_dict['r_face'] + 778), dim=0).repeat(len(v3d), 1, 1).to(v3d.device)
+        # v_color = np.array([[1, 0, 0], [0, 0, 1]])
+        v_color = torch.zeros((778 * 2, 3))
+        v_color[:778, 2] = 1#255
+        v_color[778:, 1] = 1#255
+    if l_flag and not r_flag:
+        v3d = l_hand
+        faces = data_dict['l_face'].repeat(len(v3d), 1, 1).to(v3d.device)
+        # v_color = np.array([[1, 0, 0]])
+        v_color = torch.zeros((778, 3))
+        v_color[:, 2] = 1#255
+    if not l_flag and r_flag:
+        v3d = r_hand
+        faces = data_dict['r_face'].repeat(len(v3d), 1, 1).to(v3d.device)
+        # v_color = np.array([[[0, 0, 1]]])
+        v_color = torch.zeros((778, 3))
+        v_color[:, 1] = 1#255
+    if not l_flag and not r_flag:
+        cv2.imwrite(f'{save_dir}/render/{name}.png', img)
+    else:
+        rendered = renderer(v3d, faces, v_color.repeat(len(v3d), 1, 1).to(v3d.device)).detach().cpu().numpy()
+        valid_mask = (rendered[:,:,:,[-1]] > 0).astype(np.uint8)
+        rendered_img = (img*(1-valid_mask[0]) + rendered[0,:,:,:3]*valid_mask[0]).astype(np.uint8)
+        rendered_img = np.clip(rendered_img, 0, 255)
+        cv2.imwrite(f'{save_dir}/render/{name}.png', rendered_img)

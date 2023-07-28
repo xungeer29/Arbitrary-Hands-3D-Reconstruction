@@ -12,11 +12,11 @@ root_dir = os.path.join(os.path.dirname(__file__),'..')
 if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
-from acr.config import args
+# from acr.config import args
 from acr.result_parser import ResultParser
 from acr.utils import BHWC_to_BCHW
-if args().model_precision=='fp16':
-    from torch.cuda.amp import autocast
+# if args().model_precision=='fp16':
+#     from torch.cuda.amp import autocast
 
 BN_MOMENTUM = 0.1
 
@@ -28,22 +28,16 @@ class ACR(nn.Module):
         self._result_parser = ResultParser() # manolayer and post-processing
         self._build_head()
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def forward(self, meta_data, **cfg):
-        if args().model_precision=='fp16':
-            with autocast():
-                x = self.backbone(meta_data['image'].contiguous().cuda())
-                outputs = self.head_forward(x)
-                outputs, meta_data = self._result_parser.parse(outputs, meta_data, cfg)
-        else:
-            x = self.backbone(meta_data['image'].contiguous().cuda())
-            outputs = self.head_forward(x)
-            outputs, meta_data = self._result_parser.parse(outputs, meta_data, cfg)
+        x = self.backbone(meta_data['image'].contiguous())
+        outputs = self.head_forward(x)
+        outputs, meta_data = self._result_parser.parse(outputs, meta_data, cfg)
 
         outputs['meta_data'] = meta_data
         return outputs
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def head_forward(self,x, gt_segm=None):
 
         pred_segm = self.backbone.hand_segm(x)
@@ -57,32 +51,27 @@ class ACR(nn.Module):
                 'r_params_maps':r_params_maps.float(),
                 'l_center_map':l_center_maps.float(),
                 'r_center_map':r_center_maps.float(),
-                'l_prior_maps':l_prior_maps.float() if args().inter_prior else None, 
-                'r_prior_maps':r_prior_maps.float() if args().inter_prior else None,
-                'segms':segms.float() if 'pred' in args().attention_mode else None
+                'l_prior_maps':l_prior_maps.float(), 
+                'r_prior_maps':r_prior_maps.float(),
+                'segms':segms.float(),
                 }
 
         return output
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def global_forward(self, x):
 
         # split into left and right
         l_params_maps = self.l_final_layers[1](x)
         l_center_maps = self.l_final_layers[2](x)
-        if args().inter_prior:
-            l_prior_maps = self.l_final_layers[4](x)
-        else:
-            l_prior_maps = None
+        l_prior_maps = self.l_final_layers[4](x)
 
         r_params_maps = self.r_final_layers[1](x)
         r_center_maps = self.r_final_layers[2](x)
-        if args().inter_prior:
-            r_prior_maps = self.r_final_layers[4](x)
-        else:
-            r_prior_maps = None
+        r_prior_maps = self.r_final_layers[4](x)
 
-        if args().merge_mano_camera_head:
+        merge_mano_camera_head = False
+        if merge_mano_camera_head:
             print('Merging head not applicable')
             raise NotImplementedError
             l_cam_maps, r_params_maps = l_params_maps[:,:3], l_params_maps[:,3:]
@@ -92,8 +81,8 @@ class ACR(nn.Module):
             r_cam_maps = self.r_final_layers[3](x)
 
         # to make sure that scale is always a positive value
-        l_cam_maps[:, 0] = torch.pow(1.1,l_cam_maps[:, 0])
-        r_cam_maps[:, 0] = torch.pow(1.1,r_cam_maps[:, 0])
+        l_cam_maps[:, 0] = torch.pow(1.1,l_cam_maps[:, 0].clone())
+        r_cam_maps[:, 0] = torch.pow(1.1,r_cam_maps[:, 0].clone())
 
         l_params_maps = torch.cat([l_cam_maps, l_params_maps], 1)
         r_params_maps = torch.cat([r_cam_maps, r_params_maps], 1)
@@ -112,7 +101,7 @@ class ACR(nn.Module):
 
         return attended_features
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def part_forward(self, x, gt_segm, pred_segm, l_params_maps, r_params_maps):
         ####################################################
         ################## contact offsets #################
@@ -166,9 +155,9 @@ class ACR(nn.Module):
         return l_params_maps, r_params_maps, logits
 
     def _build_head(self):
-        self.outmap_size = args().centermap_size
+        self.outmap_size = 64 # args().centermap_size
         params_num, cam_dim = self._result_parser.params_num, 3
-        self.head_cfg = {'NUM_HEADS': 1, 'NUM_CHANNELS': 64, 'NUM_BASIC_BLOCKS': args().head_block_num}
+        self.head_cfg = {'NUM_HEADS': 1, 'NUM_CHANNELS': 64, 'NUM_BASIC_BLOCKS': 2} # args().head_block_num
         self.output_cfg = {'NUM_PARAMS_MAP':params_num-cam_dim, 'NUM_CENTER_MAP':1, 'NUM_CAM_MAP':cam_dim}
 
         # GLOBAL module
@@ -187,7 +176,8 @@ class ACR(nn.Module):
         final_layers.append(None)
 
         input_channels += 2
-        if args().merge_mano_camera_head:
+        merge_mano_camera_head = False
+        if merge_mano_camera_head:
             print('Merging head not applicable')
             raise NotImplementedError
             final_layers.append(self._make_head_layers(input_channels, self.output_cfg['NUM_PARAMS_MAP']+self.output_cfg['NUM_CAM_MAP']))
@@ -196,8 +186,7 @@ class ACR(nn.Module):
             final_layers.append(self._make_head_layers(input_channels, self.output_cfg['NUM_PARAMS_MAP']))
             final_layers.append(self._make_head_layers(input_channels, self.output_cfg['NUM_CENTER_MAP']))
             final_layers.append(self._make_head_layers(input_channels, self.output_cfg['NUM_CAM_MAP']))
-            if args().inter_prior:
-                final_layers.append(self._make_head_layers(input_channels, self.output_cfg['NUM_PARAMS_MAP']))
+            final_layers.append(self._make_head_layers(input_channels, self.output_cfg['NUM_PARAMS_MAP']))
 
         return nn.ModuleList(final_layers)
 
@@ -251,7 +240,10 @@ class ACR(nn.Module):
         ))
 
         # if concat, add 2 more layer
-        if args().offset_mode == 'concat':
+        # ['offset', 'replace', 'concat']
+        offset_mode = 'concat'
+        # if args().offset_mode == 'concat':
+        if offset_mode == 'concat':
             final_layers.append(nn.Conv2d(in_channels=2 * 109, out_channels=109,\
             kernel_size=1,stride=1,padding=0))
             final_layers.append(nn.Conv2d(in_channels=2 * 109, out_channels=109,\
@@ -695,7 +687,9 @@ class HigherResolutionNet(nn.Module):
         super(HigherResolutionNet, self).__init__()
         self.make_baseline()
         self.backbone_channels = 32
-        if 'part' in args().attention_mode:
+        attention_mode = 'pred-part'
+        # if 'part' in args().attention_mode:
+        if 'part' in attention_mode:
             self.hand_segm = SegmNet(out_dim=33)
         else:
             raise ValueError
@@ -751,8 +745,7 @@ class HigherResolutionNet(nn.Module):
 
         return nn.Sequential(*layers)
 
-    def _make_stage(self, layer_config, num_inchannels,
-                    multi_scale_output=True):
+    def _make_stage(self, layer_config, num_inchannels, multi_scale_output=True):
         num_modules = layer_config['NUM_MODULES']
         num_branches = layer_config['NUM_BRANCHES']
         num_blocks = layer_config['NUM_BLOCKS']
@@ -829,7 +822,7 @@ class HigherResolutionNet(nn.Module):
             self.stage4_cfg, num_channels, multi_scale_output=False)
 
     def forward(self, x):
-        x = ((BHWC_to_BCHW(x)/ 255.) * 2.0 - 1.0).contiguous()
+        # x = ((BHWC_to_BCHW(x)/ 255.) * 2.0 - 1.0).contiguous()
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)

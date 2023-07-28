@@ -60,7 +60,7 @@ def parse_args(input_args=None):
     train_group.add_argument('--batch_size',default=64,help='batch_size',type=int)
     train_group.add_argument('--input_size',default=512,type=int,help = 'size of input image')
     #train_group.add_argument('--master_batch_size',default=-1,help='batch_size',type=int)
-    train_group.add_argument('--nw',default=4,help='number of workers',type=int)
+    train_group.add_argument('--nw',default=16, help='number of workers',type=int)
     train_group.add_argument('--optimizer_type',type = str,default = 'Adam',help = 'choice of optimizer')
     train_group.add_argument('--pretrain', type=str, default='simplebaseline',help='imagenet or spin or simplebaseline')
     train_group.add_argument('--fix_backbone_training_scratch',type = bool,default = False,help = 'whether to fix the backbone features if we train the model from scratch.')

@@ -8,10 +8,15 @@ import matplotlib
 matplotlib.use('agg')
 import math
 
-from acr.config import args
+# from acr.config import args
 from mano.manolayer import ManoLayer
 from acr.utils import process_idx
 from collections import OrderedDict
+
+align_idx = 9
+mano_mesh_root_align = True
+FL = 1265 # focal_length
+render_size = 512
 
 default_cfg = {'save_dir':None, 'vids':None, 'settings':[]} # 'put_org'
 
@@ -39,7 +44,8 @@ class Visualizer(object):
         self.mano_layer=torch.nn.ModuleDict({
             '1':ManoLayer(
                     ncomps=45,
-                    center_idx=args().align_idx if args().mano_mesh_root_align else None,#9, # TODO: 1. wrist align? root align ? 0 or 9?
+                    # center_idx=args().align_idx if args().mano_mesh_root_align else None,#9, # TODO: 1. wrist align? root align ? 0 or 9?
+                    center_idx=align_idx if mano_mesh_root_align else None,#9, # TODO: 1. wrist align? root align ? 0 or 9?
                     side='right',
                     mano_root='mano/',
                     use_pca=False,
@@ -47,7 +53,8 @@ class Visualizer(object):
                 ),
             '0':ManoLayer(
                     ncomps=45,
-                    center_idx=args().align_idx if args().mano_mesh_root_align else None,#9, # TODO: 1. wrist align? root align ? 0 or 9?
+                    # center_idx=args().align_idx if args().mano_mesh_root_align else None,#9, # TODO: 1. wrist align? root align ? 0 or 9?
+                    center_idx=align_idx if mano_mesh_root_align else None,#9, # TODO: 1. wrist align? root align ? 0 or 9?
                     side='left',
                     mano_root='mano/',
                     use_pca=False,
@@ -56,7 +63,8 @@ class Visualizer(object):
             
             'right':ManoLayer(
                     ncomps=45,
-                    center_idx=args().align_idx if args().mano_mesh_root_align else None,#9, # TODO: 1. wrist align? root align ? 0 or 9?
+                    # center_idx=args().align_idx if args().mano_mesh_root_align else None,#9, # TODO: 1. wrist align? root align ? 0 or 9?
+                    center_idx=align_idx if mano_mesh_root_align else None,#9, # TODO: 1. wrist align? root align ? 0 or 9?
                     side='right',
                     mano_root='mano/',
                     use_pca=False,
@@ -64,7 +72,8 @@ class Visualizer(object):
                 ),
             'left':ManoLayer(
                     ncomps=45,
-                    center_idx=args().align_idx if args().mano_mesh_root_align else None,#9, # TODO: 1. wrist align? root align ? 0 or 9?
+                    # center_idx=args().align_idx if args().mano_mesh_root_align else None,#9, # TODO: 1. wrist align? root align ? 0 or 9?
+                    center_idx=align_idx if mano_mesh_root_align else None,#9, # TODO: 1. wrist align? root align ? 0 or 9?
                     side='left',
                     mano_root='mano/',
                     use_pca=False,
@@ -91,7 +100,8 @@ class Visualizer(object):
                 else:
                     color = np.array([pre_colors[x] for x in hand_type])
 
-                rendered_img = self.renderer(verts, faces, colors=color, focal_length=args().focal_length, cam_params=cam_params)
+                # rendered_img = self.renderer(verts, faces, colors=color, focal_length=args().focal_length, cam_params=cam_params)
+                rendered_img = self.renderer(verts, faces, colors=color, focal_length=FL, cam_params=cam_params)
                 rendered_imgs.append(rendered_img)
             if len(rendered_imgs)>0:
                 if isinstance(rendered_imgs[0],torch.Tensor):
@@ -107,7 +117,7 @@ class Visualizer(object):
             rendered_imgs = []
             for ind, (verts, j3d, hand_type) in enumerate(zip(verts_list, j3d_list, hand_type_list)):
                 if trans is not None:
-                    j3d += trans[ind].unsqueeze(1)
+                    j3d += trans[ind].unsqueeze(1) # ?????????????
                     verts += trans[ind].unsqueeze(1)
 
                 if isinstance(colors, list):
@@ -140,7 +150,8 @@ class Visualizer(object):
                     verts = verts - trans_root
                     print(f'rending other view {theta}/{trans_root}!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!11')
                 '''
-                rendered_img = self.renderer(verts, all_face, colors=color, focal_length=args().focal_length, cam_params=cam_params)
+                # rendered_img = self.renderer(verts, all_face, colors=color, focal_length=args().focal_length, cam_params=cam_params)
+                rendered_img = self.renderer(verts, all_face, colors=color, focal_length=FL, cam_params=cam_params)
                 rendered_imgs.append(rendered_img)
 
             if len(rendered_imgs)>0:
@@ -202,7 +213,8 @@ class Visualizer(object):
 
                         # 1
                         (ih, iw), (ph,pw) = org_imge.shape[:2], img_pad_size[inds]
-                        if args().render_size > 1000:
+                        # if args().render_size > 1000:
+                        if render_size > 1000:
                             ih, iw, ph, pw = ih*4, iw*4, ph*4, pw*4
                             org_imge = F.interpolate(torch.from_numpy(org_imge).unsqueeze(0).permute(0, 3, 1, 2).float(),scale_factor=(4,4),mode='bilinear').permute(0, 2, 3, 1).numpy()[0]
                             #org_imge = cv2.resize(org_imge, (iw, ih))
@@ -212,7 +224,8 @@ class Visualizer(object):
                         (ct, cr, cb, cl), (pt, pr, pb, pl) = crop_trbl[inds], pad_trbl[inds]
 
                         # 3
-                        if args().render_size > 1000:
+                        # if args().render_size > 1000:
+                        if render_size > 1000:
                             ct, cr, cb, cl, pt, pr, pb, pl = ct*4, cr*4, cb*4, cl*4, pt*4, pr*4, pb*4, pl*4
                         org_imge[ct:ih-cb, cl:iw-cr] = resized_images[pt:ph-pb, pl:pw-pr]
                         rendering_onorg_images.append(org_imge)
@@ -504,3 +517,249 @@ class Plotter3dPoses:
             [-sin(theta),  cos(theta) * sin(phi)],
             [ 0,                       -cos(phi)]
         ], dtype=np.float32)  # transposed
+
+
+
+
+# -------------------------------------
+# intaghand
+# Data structures and functions for rendering
+from pytorch3d.structures import Meshes, packed_to_list
+from pytorch3d.vis.plotly_vis import AxisArgs, plot_batch_individually, plot_scene
+from pytorch3d.vis.texture_vis import texturesuv_image_matplotlib
+from pytorch3d.renderer import (
+    look_at_view_transform,
+    PerspectiveCameras,
+    OrthographicCameras,
+    PointLights,
+    DirectionalLights,
+    Materials,
+    RasterizationSettings,
+    MeshRenderer,
+    MeshRasterizer,
+    SoftPhongShader,
+    HardPhongShader,
+    TexturesUV,
+    Textures,
+    TexturesVertex,
+    HardFlatShader,
+    HardGouraudShader,
+    AmbientLights,
+    SoftSilhouetteShader
+)
+from pytorch3d.io import load_obj
+
+def convert_to_textureVertex(textures_uv: TexturesUV, meshes:Meshes) -> TexturesVertex:
+    verts_colors_packed = torch.zeros_like(meshes.verts_packed())
+    verts_colors_packed[meshes.faces_packed()] = textures_uv.faces_verts_textures_packed()  # (*)
+    return TexturesVertex(packed_to_list(verts_colors_packed, meshes.num_verts_per_mesh()))
+
+class Renderer():
+    def __init__(self, img_size, device='cpu'):
+        self.img_size = img_size
+        self.raster_settings = RasterizationSettings(
+            image_size=img_size,
+            blur_radius=0.0,
+            faces_per_pixel=1
+        )
+
+        self.amblights = AmbientLights(device=device)
+        self.point_lights = PointLights(location=[[0, 0, -1.0]], device=device)
+
+        self.renderer_rgb = MeshRenderer(
+            rasterizer=MeshRasterizer(raster_settings=self.raster_settings),
+            shader=HardPhongShader(device=device)
+        )
+        self.device = device
+
+    def build_camera(self, cameras=None,
+                     scale=None, trans2d=None):
+        if scale is not None and trans2d is not None:
+            bs = scale.shape[0]
+            R = torch.tensor([[-1, 0, 0], [0, -1, 0], [0, 0, 1]]).repeat(bs, 1, 1).to(scale.dtype)
+            T = torch.tensor([0, 0, 10]).repeat(bs, 1).to(scale.dtype)
+            return OrthographicCameras(focal_length=2 * scale.to(self.device),
+                                       principal_point=-trans2d.to(self.device),
+                                       R=R.to(self.device),
+                                       T=T.to(self.device),
+                                       in_ndc=True,
+                                       device=self.device)
+        if cameras is not None:
+            # cameras: bs x 3 x 3
+            fs = -torch.stack((cameras[:, 0, 0], cameras[:, 1, 1]), dim=-1) * 2 / self.img_size
+            pps = -cameras[:, :2, -1] * 2 / self.img_size + 1
+            return PerspectiveCameras(focal_length=fs.to(self.device),
+                                      principal_point=pps.to(self.device),
+                                      in_ndc=True,
+                                      device=self.device
+                                      )
+
+    def build_texture(self, uv_verts=None, uv_faces=None, texture=None, v_color=None):
+        if uv_verts is not None and uv_faces is not None and texture is not None:
+            return TexturesUV(texture.to(self.device), uv_faces.to(self.device), uv_verts.to(self.device))
+        if v_color is not None:
+            return TexturesVertex(verts_features=v_color.to(self.device))
+
+    def render(self, verts, faces, cameras, textures, amblights=False, lights=None, convert=False):
+        if lights is None:
+            if amblights:
+                lights = self.amblights
+            else:
+                lights = self.point_lights
+        mesh = Meshes(verts=verts.to(self.device), faces=faces.to(self.device), textures=textures)
+        if convert:
+            textures = convert_to_textureVertex(textures, mesh)
+            mesh = Meshes(verts=verts.to(self.device), faces=faces.to(self.device), textures=textures)
+
+        output = self.renderer_rgb(mesh, cameras=cameras, lights=lights)
+        alpha = output[..., 3]
+        img = output[..., :3] / 255
+        return img, alpha
+
+class mano_two_hands_renderer(Renderer):
+    def __init__(self, img_size=224, uv_mano_path='/data/gaofuxun/Data/mano-part-mask/mano_uv.obj', device='cpu'):
+        super(mano_two_hands_renderer, self).__init__(img_size, device)
+        verts, faces_, aux = load_obj(uv_mano_path, load_textures=True, device=device)
+        # self.normals = aux.normals # (778->795, 3) [[ 0.3215, -0.8907, -0.3215], [], ...] [-1, 1]
+        self.verts_uvs = aux.verts_uvs # (906->923, 2) [[0.2424, 0.2654], [], ...]  [0.0064, 0.9928]
+        
+        self.faces_uvs = faces_.textures_idx # (1538->1554, 3) [0,905]
+        # self.faces_normals = faces_.normals_idx # (1538->1554, 3) [0,777]
+        self.faces_verts = faces_.verts_idx # (1538->1554, 3) [0,777]
+        # print('self.normals:', self.normals.shape, self.normals.max(), self.normals.min())
+        # print('self.verts_uvs:', self.verts_uvs.shape, self.verts_uvs.max(), self.verts_uvs.min())
+        # print('self.faces_uvs:', self.faces_uvs.shape, self.faces_uvs.max(), self.faces_uvs.min())
+        # print('self.faces_normals:', self.faces_normals.shape, self.faces_normals.max(), self.faces_normals.min())
+        # print('self.faces_verts:', self.faces_verts.shape, self.faces_verts.max(), self.faces_verts.min())
+        tex_maps = cv2.imread(uv_mano_path.replace('mano_uv.obj', 'mano_BaseColor.png'))
+        self.tex_maps = torch.from_numpy(tex_maps).to(device)/255 # (2048, 2048, 3)
+
+    def render_rgb(self, cameras=None, scale=None, trans2d=None,
+                   v3d=None, faces=None,
+                   uv_verts=None, uv_faces=None, texture=None, v_color=None,
+                   amblights=False,
+                   lights=None):
+        bs = v3d.shape[0]
+        vNum = v3d.shape[1]
+
+        if v_color is None:
+            v_color = torch.zeros((778 * 2, 3))
+            v_color[:778, 0] = 204
+            v_color[:778, 1] = 153
+            v_color[:778, 2] = 0
+            v_color[778:, 0] = 102
+            v_color[778:, 1] = 102
+            v_color[778:, 2] = 255
+
+        if not isinstance(v_color, torch.Tensor):
+            v_color = torch.tensor(v_color)
+        v_color = v_color.expand(bs, vNum, 3).float().to(self.device)
+
+        if faces is None:
+            faces = self.faces.repeat(bs, 1, 1)
+
+        return self.render(v3d,
+                           faces,
+                           self.build_camera(cameras, scale, trans2d),
+                           self.build_texture(uv_verts, uv_faces, texture, v_color),
+                           amblights,
+                           lights)
+
+    def render_rgb_orth(self, scale_left=None, trans2d_left=None,
+                        scale_right=None, trans2d_right=None,
+                        v3d_left=None, v3d_right=None,
+                        uv_verts=None, uv_faces=None, texture=None, v_color=None,
+                        amblights=False):
+        scale = scale_left
+        trans2d = trans2d_left
+
+        s = scale_right / scale_left
+        d = -(trans2d_left - trans2d_right) / 2 / scale_left.unsqueeze(-1)
+
+        s = s.unsqueeze(-1).unsqueeze(-1)
+        d = d.unsqueeze(1)
+        v3d_right = s * v3d_right
+        v3d_right[..., :2] = v3d_right[..., :2] + d
+
+        # scale = (scale_left + scale_right) / 2
+        # trans2d = (trans2d_left + trans2d_right) / 2
+
+        return self.render_rgb(self, scale=scale, trans2d=trans2d,
+                               v3d_left=v3d_left, v3d_right=v3d_right,
+                               uv_verts=uv_verts, uv_faces=uv_faces, texture=texture, v_color=v_color,
+                               amblights=amblights)
+
+    def render_mask(self, cameras=None, scale=None, trans2d=None,
+                    v3d_left=None, v3d_right=None, faces_left=None, faces_right=None):
+        if v3d_left is not None and v3d_right is not None:
+            v3d = torch.cat((v3d_left, v3d_right), 1)
+            faces = torch.cat((faces_left, faces_right + 778), dim=0).repeat(len(v3d), 1, 1).to(v3d.device)
+            v_color = torch.zeros((778 * 2, 3))
+            v_color[:778, 2] = 255
+            v_color[778:, 1] = 255
+        elif v3d_left is not None and v3d_right is None:
+            v3d = v3d_left
+            faces = faces_left.repeat(len(v3d), 1, 1).to(v3d.device)
+            v_color = torch.zeros((778, 3))
+            v_color[:778, 2] = 255
+        elif v3d_left is None and v3d_right is not None:
+            v3d = v3d_right
+            faces = faces_right.repeat(len(v3d), 1, 1).to(v3d.device)
+            v_color = torch.zeros((778, 3))
+            v_color[:778, 1] = 255
+        else:
+            return np.zeros((self.img_size, self.img_size, 3))
+        rgb, mask = self.render_rgb(cameras, scale, trans2d,
+                                    v3d, faces,
+                                    v_color=v_color,
+                                    amblights=True)
+        return rgb
+    
+    def render_part_mask(self, cameras=None, scale=None, trans2d=None, v3d_left=None, v3d_right=None):
+        if v3d_left is not None and v3d_right is not None:
+            v3d = torch.cat((v3d_left, v3d_right), 1)
+            faces = torch.cat((self.faces_verts, self.faces_verts + 779), dim=0).repeat(len(v3d), 1, 1).to(v3d.device)
+            uv_faces = torch.cat((self.faces_uvs, self.faces_uvs + 923), dim=0).repeat(len(v3d), 1, 1).to(v3d.device)
+            verts_uvs2 = self.verts_uvs.clone()
+            verts_uvs2[:, 1] += 1
+            uv_verts = torch.cat((self.verts_uvs, verts_uvs2), dim=0).repeat(len(v3d), 1, 1).to(v3d.device)
+            uv_verts[:,:, 1] /= 2
+            texture = torch.cat((self.tex_maps, self.tex_maps[:,:,[2,0,1]]), dim=0).repeat(len(v3d), 1, 1, 1).to(v3d.device)
+        elif v3d_left is not None and v3d_right is None:
+            v3d = v3d_left
+            faces = self.faces_verts.repeat(len(v3d), 1, 1).to(v3d.device)
+            uv_verts = self.verts_uvs.repeat(len(v3d), 1, 1).to(v3d.device)
+            uv_faces = self.faces_uvs.repeat(len(v3d), 1, 1).to(v3d.device)
+            texture = self.tex_maps.repeat(len(v3d), 1, 1, 1).to(v3d.device)
+        elif v3d_left is None and v3d_right is not None:
+            v3d = v3d_right
+            faces = self.faces_verts.repeat(len(v3d), 1, 1).to(v3d.device)
+            uv_verts = self.verts_uvs.repeat(len(v3d), 1, 1).to(v3d.device)
+            uv_faces = self.faces_uvs.repeat(len(v3d), 1, 1).to(v3d.device)
+            texture = self.tex_maps[:,:,[2,0,1]].repeat(len(v3d), 1, 1, 1).to(v3d.device)
+        else:
+            return np.zeros((self.img_size, self.img_size, 3))
+        
+        rgb, mask = self.render(v3d,
+                           faces,
+                           self.build_camera(cameras, scale, trans2d),
+                           self.build_texture(uv_verts=uv_verts, uv_faces=uv_faces, texture=texture, v_color=None),
+                           amblights=True,
+                           lights=None,
+                           convert=False)
+        return rgb
+
+    def render_densepose(self, cameras=None, scale=None, trans2d=None,
+                         v3d_left=None, v3d_right=None,):
+        bs = v3d_left.shape[0]
+        vNum = v3d_left.shape[1]
+
+        v3d = torch.cat((v3d_left, v3d_right), dim=1)
+
+        v_color = torch.cat((self.dense_coor, self.dense_coor), dim=0)
+
+        return self.render(v3d,
+                           self.faces.repeat(bs, 1, 1),
+                           self.build_camera(cameras, scale, trans2d),
+                           self.build_texture(v_color=v_color.expand(bs, 2 * vNum, 3).to(v3d_left)),
+                           True)
