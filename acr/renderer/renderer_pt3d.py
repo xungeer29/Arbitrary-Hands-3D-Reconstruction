@@ -24,9 +24,9 @@ from pytorch3d.renderer import (
 )
 import numpy as np
 
-import acr.config
+# import acr.config
 
-from acr.config import args
+# from acr.config import args
 #from models import smpl_model
 
 colors = {
@@ -36,25 +36,31 @@ colors = {
     'yellow': [.5, .7, .75],
 }
 
+GPUS = '0'
+FOV = 22.5
+smpl_model_path = ''
 
 class Renderer(nn.Module):
-    def __init__(self, resolution=(512,512), perps=True, R=None, T=None, use_gpu='-1' not in str(args().GPUS)):
+    # def __init__(self, resolution=(512,512), perps=True, R=None, T=None, use_gpu='-1' not in str(args().GPUS)):
+    def __init__(self, resolution=(512,512), perps=True, R=None, T=None, use_gpu='-1' not in str(GPUS), device=torch.device('cuda:0')):
         super(Renderer, self).__init__()
         self.perps = perps
-        if use_gpu:
-            self.device = torch.device('cuda:{}'.format(str(args().GPUS).split(',')[0]))
-            print('visualize in gpu mode')
-        else:
-            self.device = torch.device('cpu')
-            print('visualize in cpu mode')
+        # if use_gpu:
+        #     # self.device = torch.device('cuda:{}'.format(str(args().GPUS).split(',')[0]))
+        #     self.device = torch.device('cuda:{}'.format(str(GPUS).split(',')[0]))
+        #     print(f'visualize in gpu mode: {self.device}')
+        # else:
+        #     self.device = torch.device('cpu')
+        #     print('visualize in cpu mode')
+        self.device = device
 
         if R is None:
-            R = torch.Tensor([[[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]]])
+            R = torch.Tensor([[[-1., 0., 0.], [0., -1., 0.], [0., 0., 1.]]])
         if T is None:
             T = torch.Tensor([[0., 0., 0.]])
 
         if self.perps:
-            self.cameras = FoVPerspectiveCameras(R=R, T=T, fov=args().FOV, device=self.device)
+            self.cameras = FoVPerspectiveCameras(R=R, T=T, fov=FOV, device=self.device)
             self.lights = PointLights(ambient_color=((0.56, 0.56, 0.56),),location=torch.Tensor([[0., 0., -1]]), device=self.device)
         else:
             self.cameras = FoVOrthographicCameras(R=R, T=T, znear=0., zfar=100.0, max_y=1.0, min_y=-1.0, max_x=1.0, min_x=-1.0, device=self.device)
@@ -83,13 +89,15 @@ class Renderer(nn.Module):
     def __call__(self, verts, faces, colors=torch.Tensor(colors['neutral']), merge_meshes=True, cam_params=None,**kwargs):
         assert len(verts.shape) == 3, print('The input verts of visualizer is bounded to be 3-dims (Nx6890 x3) tensor')
         verts, faces = verts.to(self.device), faces.to(self.device)
-        verts_rgb = torch.ones_like(verts)
-        verts_rgb[:, :] = torch.from_numpy(colors).cuda().unsqueeze(1)
-
+        # verts_rgb = torch.ones_like(verts)
+        # verts_rgb[:, :] = torch.from_numpy(colors).cuda().unsqueeze(1)
+        verts_rgb = colors
+        
         textures = TexturesVertex(verts_features=verts_rgb)
-        verts[:,:,:2] *= -1
+        # verts[:,:,:2] *= -1
         #print('meshes: ', verts.shape, faces.shape, verts_rgb.shape, colors.shape, colors)
         meshes = Meshes(verts, faces, textures)
+
         if merge_meshes:
             meshes = join_meshes_as_scene(meshes)
         if cam_params is not None:
@@ -111,9 +119,11 @@ def get_renderer(test=False,**kwargs):
     renderer = Renderer(**kwargs)
     if test:
         import cv2
-        dist = 1/np.tan(np.radians(args().FOV/2.))
+        # dist = 1/np.tan(np.radians(args().FOV/2.))
+        dist = 1/np.tan(np.radians(FOV/2.))
         print('dist:', dist)
-        model = pickle.load(open(os.path.join(args().smpl_model_path,'smpl','SMPL_NEUTRAL.pkl'),'rb'), encoding='latin1')
+        # model = pickle.load(open(os.path.join(args().smpl_model_path,'smpl','SMPL_NEUTRAL.pkl'),'rb'), encoding='latin1')
+        model = pickle.load(open(os.path.join(smpl_model_path,'smpl','SMPL_NEUTRAL.pkl'),'rb'), encoding='latin1')
         np_v_template = torch.from_numpy(np.array(model['v_template'])).cuda().float()[None]
         face = torch.from_numpy(model['f'].astype(np.int32)).cuda()[None]
         np_v_template = np_v_template.repeat(2,1,1)
